@@ -128,23 +128,29 @@
 
       <div class="card">
         <div class="card-title">
-          <span>5. Etiquetas rápidas</span>
+          <span>5. Hábitos, comida o síntomas</span>
           <span class="hint">Opcional</span>
         </div>
         <div class="chip-grid" id="tag-chips">
           <button type="button" class="chip" data-tag="proteina_primero">Proteína primero</button>
+          <button type="button" class="chip" data-tag="comida_solida">Comida sólida</button>
+          <button type="button" class="chip" data-tag="cena_ligera">Cena ligera</button>
+          <button type="button" class="chip" data-tag="agua_2l">Agua 2L+</button>
+          <button type="button" class="chip" data-tag="poca_agua">Poca agua</button>
+          <button type="button" class="chip" data-tag="spinning">Spinning</button>
+          <button type="button" class="chip" data-tag="funcional">Funcional</button>
+          <button type="button" class="chip" data-tag="xbox">Xbox</button>
           <button type="button" class="chip" data-tag="snack_nocturno">Snack nocturno</button>
           <button type="button" class="chip" data-tag="antojo_dulce">Antojo dulce</button>
-          <button type="button" class="chip" data-tag="poca_agua">Poca agua</button>
-          <button type="button" class="chip" data-tag="entrenamiento">Entrenamiento</button>
-          <button type="button" class="chip" data-tag="xbox">Xbox</button>
           <button type="button" class="chip" data-tag="reflujo">Reflujo</button>
         </div>
 
-        <label for="checkin-note">Nota breve (opcional)</label>
-        <input type="text" id="checkin-note" placeholder="Ej. cacahuates en la partida, cena tarde..." />
+        <label for="checkin-note">Qué comiste o cómo te sientes (puedes usar el micrófono del teclado)</label>
+        <textarea id="checkin-note" rows="2" placeholder="Ej. Comí pollo con arroz a las 3 pm, sin reflujo y buena energía..."></textarea>
 
         <button type="button" id="save-checkin-btn" class="btn-primary">Guardar registro</button>
+
+        <div id="instant-tip-box" class="tip-card hidden"></div>
       </div>
     </section>
 
@@ -229,6 +235,8 @@
 
     <!-- TAB 3: ANÁLISIS E HISTORIAL -->
     <section id="tab-history" class="hidden">
+      <button type="button" id="copy-gemini-btn" class="btn-gemini">✨ Copiar resumen de la semana para Gemini</button>
+
       <div class="card">
         <div class="card-title">
           <span>Hoy vs. Lo esperado</span>

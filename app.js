@@ -22,7 +22,6 @@ const CONTEXT_LABELS = {
   free: 'Libre'
 };
 
-// Modelo de referencia según día del ciclo (0 a 6) y dosis (2.5 mg vs 5.0+ mg)
 const EXPECTED_MODEL = {
   '2.5': [
     { day: 0, phase: 'Día 0 · Aplicación', satMin: 3.0, satMax: 4.0, noiseMax: 3.0, desc: 'El medicamento empieza a absorberse; el pico de efecto llega entre 24 y 48 horas.' },
@@ -77,6 +76,31 @@ function calcCycleDay(appliedAt) {
   const diffMs = Date.now() - new Date(appliedAt).getTime();
   const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
   return Math.max(0, days);
+}
+
+function buildInstantTips(entry) {
+  const tips = [];
+  const day = entry.cycle_day;
+
+  if ((entry.context === 'night_xbox' || entry.tags.includes('xbox')) && entry.food_noise >= 3) {
+    tips.push('Noche de Xbox con antojo: ten a la mano bastones de pepino/jícama con limón o edamames, y sirve cualquier snack en porción cerrada desde la cocina.');
+  }
+  if (entry.gi_comfort <= 2 || entry.tags.includes('reflujo')) {
+    tips.push('Para frenar el reflujo hoy: cena sólida ligera, cero grasas antes de dormir y evita tomar mucha agua junto con la comida de la noche.');
+  }
+  if (entry.satiety >= 5 && day !== null && day <= 2) {
+    tips.push('Estás en pico de saciedad: asegúrate de cubrir tu proteína del día (pollo, claras o batido aislado) para seguir protegiendo tu masa muscular.');
+  }
+  if (entry.tags.includes('poca_agua') || (entry.food_noise >= 4 && !entry.tags.includes('agua_2l'))) {
+    tips.push('Toma un vaso grande de agua fría (o agua mineral con limón) antes de decidir si realmente tienes hambre; el medicamento adormece la sed.');
+  }
+  if (day !== null && day >= 5 && entry.food_noise >= 3) {
+    tips.push(`Día ${day} del ciclo: es normal sentir un poco más de ruido mental porque la dosis va bajando. Prioriza proteína primero en tu siguiente comida.`);
+  }
+  if (tips.length === 0) {
+    tips.push('Buen equilibrio en este registro. Mantén hidratación constante y cenas ligeras si entrenas tarde.');
+  }
+  return tips;
 }
 
 document.getElementById('dose-date').value = toLocalDatetimeInput();
@@ -226,7 +250,7 @@ document.getElementById('save-checkin-btn').addEventListener('click', async () =
     satiety: state.satiety,
     food_noise: state.food_noise,
     gi_comfort: state.gi_comfort,
-    tags: state.tags,
+    tags: [...state.tags],
     note: document.getElementById('checkin-note').value.trim() || null
   };
 
@@ -238,6 +262,14 @@ document.getElementById('save-checkin-btn').addEventListener('click', async () =
     showToast('Error al guardar: ' + error.message, true);
   } else {
     showToast('Registro guardado');
+    const tips = buildInstantTips(payload);
+    const tipBox = document.getElementById('instant-tip-box');
+    tipBox.innerHTML = `
+      <h3>Recomendación del momento</h3>
+      <ul>${tips.map(t => `<li>${t}</li>`).join('')}</ul>
+    `;
+    tipBox.classList.remove('hidden');
+
     document.getElementById('checkin-note').value = '';
     state.tags = [];
     document.querySelectorAll('#tag-chips .chip').forEach(b => b.classList.remove('active'));
@@ -292,7 +324,7 @@ document.getElementById('save-weight-btn').addEventListener('click', async () =>
   }
 });
 
-function renderExpectedVsActual(summary, logs) {
+function renderExpectedVsActual(summary) {
   const box = document.getElementById('expected-box');
   if (!latestDose) {
     box.innerHTML = '<p class="hint">Registra tu última dosis para comparar tus datos contra el día del ciclo.</p>';
@@ -545,7 +577,7 @@ async function loadHistory() {
   const logs = logsRes.data || [];
   const weights = weightsRes.data || [];
 
-  renderExpectedVsActual(summary, logs);
+  renderExpectedVsActual(summary);
   renderCycleChart(summary);
   renderInsights(summary, logs, weights);
   renderWeights(weights);
@@ -605,6 +637,64 @@ window.deleteCheckin = async (id) => {
 };
 
 document.getElementById('refresh-btn').addEventListener('click', loadHistory);
+
+// Copiar resumen para Gemini
+document.getElementById('copy-gemini-btn').addEventListener('click', async () => {
+  const client = getClient();
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const [logsRes, weightsRes] = await Promise.all([
+    client.from('check_ins').select('*').gte('recorded_at', since).order('recorded_at', { ascending: true }),
+    client.from('weigh_ins').select('*').order('measured_at', { ascending: false }).limit(2)
+  ]);
+
+  const logs = logsRes.data || [];
+  const weights = weightsRes.data || [];
+  const doseInfo = latestDose
+    ? `${latestDose.dose_mg} mg (Día ${calcCycleDay(latestDose.applied_at)} desde ${new Date(latestDose.applied_at).toLocaleDateString('es-MX')})`
+    : 'Sin dosis registrada';
+
+  let text = `Resumen semanal para análisis (Tirzepatida)\n`;
+  text += `Dosis actual: ${doseInfo}\n`;
+
+  if (weights.length > 0) {
+    const w = weights[0];
+    text += `Última báscula (${new Date(w.measured_at).toLocaleDateString('es-MX')}): ${w.weight_kg} kg`;
+    if (w.body_fat_pct) text += `, Grasa: ${w.body_fat_pct}%`;
+    if (w.muscle_mass_kg) text += `, Músculo: ${w.muscle_mass_kg} kg`;
+    if (w.visceral_fat) text += `, Visceral: ${w.visceral_fat}`;
+    text += `\n`;
+  }
+
+  text += `\nRegistros de los últimos 7 días (${logs.length}):\n`;
+  if (logs.length === 0) {
+    text += `- Sin registros aún en los últimos 7 días.\n`;
+  } else {
+    logs.forEach(item => {
+      const f = new Date(item.recorded_at).toLocaleString('es-MX', {
+        weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
+      });
+      const ctx = CONTEXT_LABELS[item.context] || item.context;
+      const tags = (item.tags && item.tags.length) ? ` | Tags: ${item.tags.join(', ')}` : '';
+      const nota = item.note ? ` | Nota: "${item.note}"` : '';
+      text += `- [${f} · Día ${item.cycle_day ?? '?'} · ${ctx}] Saciedad ${item.satiety}/5, Ruido ${item.food_noise}/5, Estómago ${item.gi_comfort}/5${tags}${nota}\n`;
+    });
+  }
+  text += `\nCon base en estos datos, ¿cómo ves mi evolución de esta semana y qué ajustes me recomiendas?`;
+
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('Resumen copiado. Pégalo en Gemini');
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast('Resumen copiado. Pégalo en Gemini');
+  }
+});
 
 document.getElementById('export-csv-btn').addEventListener('click', async () => {
   const { data, error } = await getClient()
