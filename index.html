@@ -12,6 +12,7 @@
   <link rel="apple-touch-icon" href="./icon.svg" />
   <link rel="stylesheet" href="./styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 </head>
 <body>
   <div id="toast" class="toast"></div>
@@ -55,6 +56,7 @@
       </div>
     </div>
 
+    <!-- TAB 1: CHECK-IN RÁPIDO -->
     <section id="tab-checkin">
       <div class="card">
         <div class="card-title">
@@ -146,6 +148,7 @@
       </div>
     </section>
 
+    <!-- TAB 2: DOSIS Y BÁSCULA -->
     <section id="tab-records" class="hidden">
       <div class="card">
         <div class="card-title">
@@ -197,34 +200,76 @@
           </div>
           <div>
             <label for="w-kg">Peso (kg)</label>
-            <input type="number" step="0.01" id="w-kg" placeholder="107.80" />
+            <input type="number" step="0.01" id="w-kg" placeholder="105.80" />
           </div>
         </div>
         <div class="grid-2">
           <div>
             <label for="w-fat">% Grasa corporal</label>
-            <input type="number" step="0.1" id="w-fat" placeholder="35.7" />
+            <input type="number" step="0.1" id="w-fat" placeholder="34.6" />
           </div>
           <div>
             <label for="w-muscle">Masa muscular (kg)</label>
-            <input type="number" step="0.01" id="w-muscle" placeholder="65.74" />
+            <input type="number" step="0.01" id="w-muscle" placeholder="65.59" />
           </div>
         </div>
         <div class="grid-2">
           <div>
             <label for="w-visceral">Grasa visceral</label>
-            <input type="number" step="1" id="w-visceral" placeholder="17" />
+            <input type="number" step="1" id="w-visceral" placeholder="16" />
           </div>
           <div>
             <label for="w-water">% Agua</label>
-            <input type="number" step="0.1" id="w-water" placeholder="46.3" />
+            <input type="number" step="0.1" id="w-water" placeholder="47.1" />
           </div>
         </div>
         <button type="button" id="save-weight-btn" class="btn-primary">Guardar medición</button>
       </div>
     </section>
 
+    <!-- TAB 3: ANÁLISIS E HISTORIAL -->
     <section id="tab-history" class="hidden">
+      <div class="card">
+        <div class="card-title">
+          <span>Hoy vs. Lo esperado</span>
+          <button type="button" id="refresh-btn" class="btn-secondary" style="padding:6px 10px; font-size:0.78rem;">Actualizar</button>
+        </div>
+        <div id="expected-box">
+          <p class="hint">Cargando análisis del día...</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <span>Curva semanal: Tu realidad vs. Esperado</span>
+        </div>
+        <p class="hint" style="margin:0 0 6px 0;">
+          Línea sólida = tus registros · Punteada = saciedad esperada según el día del ciclo
+        </p>
+        <div class="chart-wrap">
+          <canvas id="cycle-chart"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <span>Lo que dicen tus datos</span>
+        </div>
+        <div id="insights-box">
+          <p class="hint">Agrega algunos registros para detectar patrones.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <span>Evolución de báscula</span>
+        </div>
+        <div id="weight-kpis" class="kpi-strip"></div>
+        <div class="chart-wrap">
+          <canvas id="weight-chart"></canvas>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-title">
           <span>Promedio por día del ciclo</span>
@@ -255,7 +300,6 @@
       <div class="card">
         <div class="card-title">
           <span>Últimos registros rápidos</span>
-          <button type="button" id="refresh-btn" class="btn-secondary">Actualizar</button>
         </div>
         <div id="recent-logs">
           <p class="hint">Sin registros todavía.</p>

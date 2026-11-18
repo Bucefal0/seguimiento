@@ -83,6 +83,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
 }
 
 .hint {
@@ -347,5 +348,85 @@ th {
 }
 
 .del-btn:hover { color: var(--danger); }
+
+/* Fase 2: Análisis y comparación */
+.phase-box {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.phase-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--primary);
+  margin: 0 0 4px 0;
+}
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.compare-cell {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 8px;
+  text-align: center;
+}
+
+.compare-cell .lbl {
+  font-size: 0.72rem;
+  color: var(--muted);
+  display: block;
+}
+
+.compare-cell .val {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 3px 0;
+  display: block;
+}
+
+.compare-cell .exp {
+  font-size: 0.7rem;
+  color: var(--muted);
+  display: block;
+}
+
+.status-ok { color: var(--success); }
+.status-warn { color: var(--warn); }
+.status-info { color: var(--blue); }
+
+.insight-item {
+  background: var(--bg);
+  border-left: 3px solid var(--primary);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+}
+
+.insight-item.warn { border-left-color: var(--warn); }
+.insight-item.blue { border-left-color: var(--blue); }
+
+.chart-wrap {
+  position: relative;
+  height: 220px;
+  width: 100%;
+  margin-top: 6px;
+}
+
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
 
 .hidden { display: none !important; }

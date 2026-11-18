@@ -3,6 +3,9 @@ const STORAGE_KEY_NAME = 'sb_app_pub_key';
 let db = null;
 let currentUser = null;
 let latestDose = null;
+let cycleChartInstance = null;
+let weightChartInstance = null;
+
 let state = {
   context: 'morning',
   satiety: 3,
@@ -18,6 +21,34 @@ const CONTEXT_LABELS = {
   post_workout: 'Post-entreno',
   free: 'Libre'
 };
+
+// Modelo de referencia según día del ciclo (0 a 6) y dosis (2.5 mg vs 5.0+ mg)
+const EXPECTED_MODEL = {
+  '2.5': [
+    { day: 0, phase: 'Día 0 · Aplicación', satMin: 3.0, satMax: 4.0, noiseMax: 3.0, desc: 'El medicamento empieza a absorberse; el pico de efecto llega entre 24 y 48 horas.' },
+    { day: 1, phase: 'Día 1 · Subida rápida', satMin: 3.8, satMax: 5.0, noiseMax: 2.0, desc: 'Alta concentración inicial. Se espera saciedad marcada y poco ruido mental.' },
+    { day: 2, phase: 'Día 2 · Pico de efecto', satMin: 3.8, satMax: 5.0, noiseMax: 2.0, desc: 'Punto máximo de concentración. Cuida hidratación y porciones pequeñas en la noche.' },
+    { day: 3, phase: 'Día 3 · Meseta estable', satMin: 3.5, satMax: 4.5, noiseMax: 2.5, desc: 'Efecto sólido y equilibrado; suele ser el punto más cómodo para digerir.' },
+    { day: 4, phase: 'Día 4 · Descenso gradual', satMin: 3.0, satMax: 4.2, noiseMax: 3.0, desc: 'El nivel empieza a bajar. Prioriza proteína primero para sostener la saciedad.' },
+    { day: 5, phase: 'Día 5 · Vida media (~50%)', satMin: 2.5, satMax: 3.8, noiseMax: 3.5, desc: 'La concentración ronda la mitad. Es normal notar algo más de apetito en la tarde.' },
+    { day: 6, phase: 'Día 6 · Valle semanal', satMin: 2.0, satMax: 3.5, noiseMax: 4.0, desc: 'Nivel más bajo antes de la siguiente dosis; en 2.5 mg es común que regresen antojos.' }
+  ],
+  '5.0': [
+    { day: 0, phase: 'Día 0 · Aplicación 5 mg', satMin: 3.5, satMax: 4.5, noiseMax: 2.5, desc: 'Nueva dosis terapéutica; transición gradual sobre el remanente de la semana previa.' },
+    { day: 1, phase: 'Día 1 · Pico alto', satMin: 4.2, satMax: 5.0, noiseMax: 1.5, desc: 'Saciedad muy fuerte. Vigila no saltarte proteína ni cenar pesado por riesgo de reflujo.' },
+    { day: 2, phase: 'Día 2 · Pico sostenido', satMin: 4.2, satMax: 5.0, noiseMax: 1.5, desc: 'Máximo freno gástrico. Cenas líquidas o muy ligeras si entrenas tarde.' },
+    { day: 3, phase: 'Día 3 · Meseta firme', satMin: 4.0, satMax: 4.8, noiseMax: 2.0, desc: 'Control sólido del apetito con mejor tolerancia digestiva.' },
+    { day: 4, phase: 'Día 4 · Estabilidad media', satMin: 3.5, satMax: 4.5, noiseMax: 2.5, desc: 'Con 5 mg el descenso se amortigua mejor que con 2.5 mg.' },
+    { day: 5, phase: 'Día 5 · Vida media (~50%)', satMin: 3.2, satMax: 4.2, noiseMax: 2.8, desc: 'Ligero aumento de apetito manejable con proteína y agua.' },
+    { day: 6, phase: 'Día 6 · Valle semanal', satMin: 2.8, satMax: 4.0, noiseMax: 3.2, desc: 'Punto más bajo del ciclo, pero normalmente con mejor piso que en 2.5 mg.' }
+  ]
+};
+
+function getExpectedFor(doseMg, day) {
+  const key = (doseMg && parseFloat(doseMg) >= 5.0) ? '5.0' : '2.5';
+  const clampedDay = Math.min(6, Math.max(0, day ?? 0));
+  return { key, list: EXPECTED_MODEL[key], current: EXPECTED_MODEL[key][clampedDay] };
+}
 
 function getClient() {
   if (db) return db;
@@ -261,11 +292,266 @@ document.getElementById('save-weight-btn').addEventListener('click', async () =>
   }
 });
 
+function renderExpectedVsActual(summary, logs) {
+  const box = document.getElementById('expected-box');
+  if (!latestDose) {
+    box.innerHTML = '<p class="hint">Registra tu última dosis para comparar tus datos contra el día del ciclo.</p>';
+    return;
+  }
+
+  const day = calcCycleDay(latestDose.applied_at);
+  const { key, current } = getExpectedFor(latestDose.dose_mg, day);
+  const rowToday = (summary || []).find(r => r.cycle_day === day && parseFloat(r.dose_mg) === parseFloat(latestDose.dose_mg))
+    || (summary || []).find(r => r.cycle_day === day);
+
+  const realSat = rowToday ? parseFloat(rowToday.prom_saciedad) : null;
+  const realNoise = rowToday ? parseFloat(rowToday.prom_ruido_mental) : null;
+  const realGi = rowToday ? parseFloat(rowToday.prom_bienestar_gi) : null;
+
+  const satClass = realSat === null ? 'status-info' : (realSat >= current.satMin ? 'status-ok' : 'status-warn');
+  const noiseClass = realNoise === null ? 'status-info' : (realNoise <= current.noiseMax ? 'status-ok' : 'status-warn');
+  const giClass = realGi === null ? 'status-info' : (realGi >= 3.5 ? 'status-ok' : 'status-warn');
+
+  box.innerHTML = `
+    <div class="phase-box">
+      <div class="phase-title">${current.phase} (${key} mg)</div>
+      <div class="hint">${current.desc}</div>
+    </div>
+    <div class="compare-grid">
+      <div class="compare-cell">
+        <span class="lbl">Saciedad real</span>
+        <span class="val ${satClass}">${realSat !== null ? realSat + '/5' : '—'}</span>
+        <span class="exp">Esperado: ${current.satMin}–${current.satMax}</span>
+      </div>
+      <div class="compare-cell">
+        <span class="lbl">Ruido mental</span>
+        <span class="val ${noiseClass}">${realNoise !== null ? realNoise + '/5' : '—'}</span>
+        <span class="exp">Esperado: ≤ ${current.noiseMax}</span>
+      </div>
+      <div class="compare-cell">
+        <span class="lbl">Estómago</span>
+        <span class="val ${giClass}">${realGi !== null ? realGi + '/5' : '—'}</span>
+        <span class="exp">Ideal: ≥ 3.5</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderCycleChart(summary) {
+  const ctx = document.getElementById('cycle-chart').getContext('2d');
+  const { list } = getExpectedFor(latestDose ? latestDose.dose_mg : 2.5, 0);
+  const days = [0, 1, 2, 3, 4, 5, 6];
+  const labels = days.map(d => `Día ${d}`);
+
+  const realSat = days.map(d => {
+    const match = (summary || []).find(r => r.cycle_day === d);
+    return match ? parseFloat(match.prom_saciedad) : null;
+  });
+  const realNoise = days.map(d => {
+    const match = (summary || []).find(r => r.cycle_day === d);
+    return match ? parseFloat(match.prom_ruido_mental) : null;
+  });
+  const expSatMid = list.map(item => Number(((item.satMin + item.satMax) / 2).toFixed(2)));
+
+  if (cycleChartInstance) cycleChartInstance.destroy();
+  cycleChartInstance = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Saciedad real',
+          data: realSat,
+          borderColor: '#2dd4bf',
+          backgroundColor: '#2dd4bf',
+          tension: 0.3,
+          spanGaps: true,
+          borderWidth: 3
+        },
+        {
+          label: 'Saciedad esperada',
+          data: expSatMid,
+          borderColor: '#64748b',
+          borderDash: [5, 5],
+          pointRadius: 2,
+          tension: 0.3,
+          borderWidth: 2
+        },
+        {
+          label: 'Ruido mental real',
+          data: realNoise,
+          borderColor: '#fb923c',
+          backgroundColor: '#fb923c',
+          tension: 0.3,
+          spanGaps: true,
+          borderWidth: 2.5
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        y: { min: 1, max: 5, ticks: { stepSize: 1, color: '#94a3b8' }, grid: { color: '#334155' } },
+        x: { ticks: { color: '#94a3b8' }, grid: { display: false } }
+      },
+      plugins: {
+        legend: { labels: { color: '#f8fafc', boxWidth: 12, font: { size: 11 } } }
+      }
+    }
+  });
+}
+
+function renderInsights(summary, logs, weights) {
+  const box = document.getElementById('insights-box');
+  const items = [];
+
+  if (weights && weights.length >= 2) {
+    const first = weights[0];
+    const last = weights[weights.length - 1];
+    const diff = (last.weight_kg - first.weight_kg).toFixed(2);
+    const weeks = Math.max(1, (new Date(last.measured_at) - new Date(first.measured_at)) / (1000 * 60 * 60 * 24 * 7));
+    const avgWeek = (diff / weeks).toFixed(2);
+    items.push({
+      cls: 'blue',
+      text: `<strong>Tendencia de peso:</strong> Llevas <strong>${diff} kg</strong> en total (promedio de <strong>${avgWeek} kg/semana</strong>).`
+    });
+  }
+
+  if (summary && summary.length >= 2) {
+    const sortedByNoise = [...summary].sort((a, b) => b.prom_ruido_mental - a.prom_ruido_mental);
+    const peak = sortedByNoise[0];
+    if (parseFloat(peak.prom_ruido_mental) >= 2.5) {
+      items.push({
+        cls: 'warn',
+        text: `<strong>Tu día más vulnerable:</strong> El <strong>Día ${peak.cycle_day}</strong> promedias un ruido mental de <strong>${peak.prom_ruido_mental}/5</strong>. Conviene preparar snacks seguros ese día.`
+      });
+    }
+  }
+
+  if (logs && logs.length >= 3) {
+    const xboxLogs = logs.filter(l => l.context === 'night_xbox' || (l.tags || []).includes('xbox'));
+    if (xboxLogs.length >= 1) {
+      const avgXboxNoise = (xboxLogs.reduce((s, l) => s + l.food_noise, 0) / xboxLogs.length).toFixed(1);
+      items.push({
+        cls: 'warn',
+        text: `<strong>Momento Xbox:</strong> En ${xboxLogs.length} registro(s) nocturnos tu ruido mental promedia <strong>${avgXboxNoise}/5</strong>.`
+      });
+    }
+
+    const refluxLogs = logs.filter(l => l.gi_comfort <= 2 || (l.tags || []).includes('reflujo'));
+    if (refluxLogs.length >= 1) {
+      items.push({
+        cls: 'warn',
+        text: `<strong>Alerta digestiva:</strong> Detectamos <strong>${refluxLogs.length}</strong> episodio(s) de incomodidad gástrica o reflujo. Cuida cenas ligeras 3 h antes de dormir.`
+      });
+    } else {
+      items.push({
+        cls: '',
+        text: `<strong>Buena tolerancia gástrica:</strong> Sin episodios recientes de reflujo fuerte en tus registros.`
+      });
+    }
+  }
+
+  if (items.length === 0) {
+    box.innerHTML = '<p class="hint">Haz al menos 3 check-ins para que la app empiece a detectar tus patrones.</p>';
+  } else {
+    box.innerHTML = items.map(i => `<div class="insight-item ${i.cls}">${i.text}</div>`).join('');
+  }
+}
+
+function renderWeights(weights) {
+  const kpiBox = document.getElementById('weight-kpis');
+  if (!weights || weights.length === 0) {
+    kpiBox.innerHTML = '<p class="hint" style="grid-column:1/-1;">Aún no hay mediciones de báscula en la nube.</p>';
+    return;
+  }
+
+  const first = weights[0];
+  const last = weights[weights.length - 1];
+  const diff = (last.weight_kg - first.weight_kg).toFixed(2);
+  const fatDiff = (last.body_fat_pct && first.body_fat_pct)
+    ? (last.body_fat_pct - first.body_fat_pct).toFixed(1) + '%'
+    : '—';
+
+  kpiBox.innerHTML = `
+    <div class="compare-cell">
+      <span class="lbl">Peso actual</span>
+      <span class="val status-info">${last.weight_kg} kg</span>
+    </div>
+    <div class="compare-cell">
+      <span class="lbl">Cambio total</span>
+      <span class="val status-ok">${diff} kg</span>
+    </div>
+    <div class="compare-cell">
+      <span class="lbl">% Grasa</span>
+      <span class="val">${last.body_fat_pct ?? '—'}% (${fatDiff})</span>
+    </div>
+  `;
+
+  const ctx = document.getElementById('weight-chart').getContext('2d');
+  const labels = weights.map(w => new Date(w.measured_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short' }));
+  const pesoData = weights.map(w => w.weight_kg);
+  const muscData = weights.map(w => w.muscle_mass_kg);
+
+  if (weightChartInstance) weightChartInstance.destroy();
+  weightChartInstance = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Peso (kg)',
+          data: pesoData,
+          borderColor: '#38bdf8',
+          backgroundColor: '#38bdf8',
+          tension: 0.25,
+          borderWidth: 3
+        },
+        {
+          label: 'Músculo (kg)',
+          data: muscData,
+          borderColor: '#34d399',
+          backgroundColor: '#34d399',
+          tension: 0.25,
+          spanGaps: true,
+          borderWidth: 2.5
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        y: { ticks: { color: '#94a3b8' }, grid: { color: '#334155' } },
+        x: { ticks: { color: '#94a3b8' }, grid: { display: false } }
+      },
+      plugins: {
+        legend: { labels: { color: '#f8fafc', boxWidth: 12, font: { size: 11 } } }
+      }
+    }
+  });
+}
+
 async function loadHistory() {
   const client = getClient();
-  const { data: summary } = await client.from('v_cycle_summary').select('*');
+  const [summaryRes, logsRes, weightsRes] = await Promise.all([
+    client.from('v_cycle_summary').select('*'),
+    client.from('check_ins').select('*').order('recorded_at', { ascending: false }).limit(50),
+    client.from('weigh_ins').select('*').order('measured_at', { ascending: true })
+  ]);
+
+  const summary = summaryRes.data || [];
+  const logs = logsRes.data || [];
+  const weights = weightsRes.data || [];
+
+  renderExpectedVsActual(summary, logs);
+  renderCycleChart(summary);
+  renderInsights(summary, logs, weights);
+  renderWeights(weights);
+
   const tbody = document.getElementById('cycle-summary-body');
-  if (!summary || summary.length === 0) {
+  if (summary.length === 0) {
     tbody.innerHTML = '<tr><td colspan="6" class="hint">Aún no hay suficientes datos.</td></tr>';
   } else {
     tbody.innerHTML = summary.map(r => `
@@ -280,17 +566,11 @@ async function loadHistory() {
     `).join('');
   }
 
-  const { data: logs } = await client
-    .from('check_ins')
-    .select('*')
-    .order('recorded_at', { ascending: false })
-    .limit(20);
-
   const container = document.getElementById('recent-logs');
-  if (!logs || logs.length === 0) {
+  if (logs.length === 0) {
     container.innerHTML = '<p class="hint">Sin registros todavía.</p>';
   } else {
-    container.innerHTML = logs.map(item => {
+    container.innerHTML = logs.slice(0, 20).map(item => {
       const dateStr = new Date(item.recorded_at).toLocaleString('es-MX', {
         month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
       });
