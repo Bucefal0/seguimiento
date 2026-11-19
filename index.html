@@ -56,7 +56,6 @@
       </div>
     </div>
 
-    <!-- TAB 1: CHECK-IN RÁPIDO -->
     <section id="tab-checkin">
       <div class="card">
         <div class="card-title">
@@ -146,7 +145,7 @@
         </div>
 
         <label for="checkin-note">Qué comiste o cómo te sientes (puedes usar el micrófono del teclado)</label>
-        <textarea id="checkin-note" rows="2" placeholder="Ej. Comí pollo con arroz a las 3 pm, sin reflujo y buena energía..."></textarea>
+        <textarea id="checkin-note" rows="2" placeholder="Ej. Hoy cené atún con tostadas, sin reflujo..."></textarea>
 
         <button type="button" id="save-checkin-btn" class="btn-primary">Guardar registro</button>
 
@@ -154,7 +153,6 @@
       </div>
     </section>
 
-    <!-- TAB 2: DOSIS Y BÁSCULA -->
     <section id="tab-records" class="hidden">
       <div class="card">
         <div class="card-title">
@@ -233,8 +231,10 @@
       </div>
     </section>
 
-    <!-- TAB 3: ANÁLISIS E HISTORIAL -->
     <section id="tab-history" class="hidden">
+      <button type="button" id="analyze-deepseek-btn" class="btn-deepseek">🤖 Analizar mis últimos 7 días con DeepSeek</button>
+      <div id="deepseek-weekly-box" class="tip-card hidden" style="margin-top:0; margin-bottom:14px;"></div>
+
       <button type="button" id="copy-gemini-btn" class="btn-gemini">✨ Copiar resumen de la semana para Gemini</button>
 
       <div class="card">
@@ -312,6 +312,18 @@
         <div id="recent-logs">
           <p class="hint">Sin registros todavía.</p>
         </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <span>Conexión DeepSeek IA (opcional)</span>
+          <span id="ds-status" class="hint">No configurada</span>
+        </div>
+        <p class="hint" style="margin:0 0 8px 0;">
+          Se guarda solo en este navegador para analizar tus notas de comida y patrones.
+        </p>
+        <input type="password" id="ds-key-input" placeholder="Pega aquí tu API Key de DeepSeek" />
+        <button type="button" id="save-ds-key-btn" class="btn-secondary" style="margin-top:8px; width:100%;">Guardar clave DeepSeek</button>
       </div>
     </section>
   </div>

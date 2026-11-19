@@ -1,5 +1,7 @@
 const STORAGE_URL_NAME = 'sb_app_url';
 const STORAGE_KEY_NAME = 'sb_app_pub_key';
+const STORAGE_DS_KEY = 'ds_api_key';
+
 let db = null;
 let currentUser = null;
 let latestDose = null;
@@ -78,6 +80,23 @@ function calcCycleDay(appliedAt) {
   return Math.max(0, days);
 }
 
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function formatBulletsHtml(rawText) {
+  const lines = rawText
+    .split('\n')
+    .map(l => l.trim().replace(/^[-*•]\s*/, '').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>'))
+    .filter(Boolean);
+  if (lines.length === 0) return '';
+  return `<ul>${lines.map(l => `<li>${l}</li>`).join('')}</ul>`;
+}
+
 function buildInstantTips(entry) {
   const tips = [];
   const day = entry.cycle_day;
@@ -101,6 +120,59 @@ function buildInstantTips(entry) {
     tips.push('Buen equilibrio en este registro. Mantén hidratación constante y cenas ligeras si entrenas tarde.');
   }
   return tips;
+}
+
+async function askDeepSeek(systemPrompt, userPrompt, maxTokens = 280) {
+  const dsKey = localStorage.getItem(STORAGE_DS_KEY);
+  if (!dsKey) return null;
+
+  const res = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${dsKey}`
+    },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      temperature: 0.4,
+      max_tokens: maxTokens
+    })
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`DeepSeek HTTP ${res.status}: ${errText.slice(0, 120)}`);
+  }
+
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content?.trim() || null;
+}
+
+const SYSTEM_PROMPT_COACH = `Eres un asistente práctico de seguimiento metabólico para un paciente hombre de 50 años (1.78 m) en tratamiento con Tirzepatida (actualmente 2.5 mg/semana, evaluando tiroides con TSH basal elevada).
+Contexto clave:
+- Entrena spinning (8-9 pm) y funcional (9-10 pm), llega a casa 10:30 pm y duerme 12:00 am.
+- Cuida proteger masa muscular (meta 110-130 g proteína/día), evitar reflujo nocturno y controlar snacks automáticos en noches de Xbox (especialmente día 5-6 del ciclo).
+Reglas de respuesta:
+- Responde en español claro, directo y cercano.
+- Entrega exactamente 2 o 3 viñetas cortas (máximo 2 líneas cada una), sin saludos ni despedidas.
+- Si el usuario escribió una nota de comida o síntoma, al menos una viñeta debe referirse directamente a ese alimento o situación específica y relacionarlo con su historial reciente si hay patrones.`;
+
+function updateDsStatusUI() {
+  const savedDs = localStorage.getItem(STORAGE_DS_KEY);
+  const statusEl = document.getElementById('ds-status');
+  const inputEl = document.getElementById('ds-key-input');
+  if (savedDs) {
+    statusEl.textContent = 'Activa';
+    statusEl.style.color = '#34d399';
+    inputEl.value = savedDs;
+  } else {
+    statusEl.textContent = 'No configurada';
+    statusEl.style.color = '#94a3b8';
+  }
 }
 
 document.getElementById('dose-date').value = toLocalDatetimeInput();
@@ -160,6 +232,7 @@ async function checkSession() {
   const savedKey = localStorage.getItem(STORAGE_KEY_NAME);
   if (savedUrl) document.getElementById('sb-url').value = savedUrl;
   if (savedKey) document.getElementById('api-key').value = savedKey;
+  updateDsStatusUI();
 
   const client = getClient();
   if (!client) {
@@ -219,6 +292,19 @@ document.getElementById('logout-btn').addEventListener('click', async () => {
   await checkSession();
 });
 
+document.getElementById('save-ds-key-btn').addEventListener('click', () => {
+  const val = document.getElementById('ds-key-input').value.trim();
+  if (!val) {
+    localStorage.removeItem(STORAGE_DS_KEY);
+    updateDsStatusUI();
+    showToast('Clave DeepSeek eliminada');
+  } else {
+    localStorage.setItem(STORAGE_DS_KEY, val);
+    updateDsStatusUI();
+    showToast('Clave DeepSeek guardada');
+  }
+});
+
 async function loadLatestDose() {
   const { data, error } = await getClient()
     .from('doses')
@@ -260,19 +346,109 @@ document.getElementById('save-checkin-btn').addEventListener('click', async () =
 
   if (error) {
     showToast('Error al guardar: ' + error.message, true);
-  } else {
-    showToast('Registro guardado');
-    const tips = buildInstantTips(payload);
-    const tipBox = document.getElementById('instant-tip-box');
-    tipBox.innerHTML = `
-      <h3>Recomendación del momento</h3>
-      <ul>${tips.map(t => `<li>${t}</li>`).join('')}</ul>
-    `;
-    tipBox.classList.remove('hidden');
+    return;
+  }
 
-    document.getElementById('checkin-note').value = '';
-    state.tags = [];
-    document.querySelectorAll('#tag-chips .chip').forEach(b => b.classList.remove('active'));
+  showToast('Registro guardado');
+  const tipBox = document.getElementById('instant-tip-box');
+  tipBox.classList.remove('hidden');
+
+  const dsKey = localStorage.getItem(STORAGE_DS_KEY);
+  if (dsKey) {
+    tipBox.innerHTML = `<h3><span>Recomendación del momento</span><span class="ai-badge">DeepSeek IA...</span></h3><p class="hint" style="margin:0;">Analizando tu nota y tus últimos días...</p>`;
+    try {
+      const { data: recent } = await getClient()
+        .from('check_ins')
+        .select('recorded_at, cycle_day, context, satiety, food_noise, gi_comfort, tags, note')
+        .order('recorded_at', { ascending: false })
+        .limit(8);
+
+      const historyLines = (recent || []).slice(1).map(r => {
+        const f = new Date(r.recorded_at).toLocaleString('es-MX', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+        return `- [${f} · Día ${r.cycle_day ?? '?'} · ${CONTEXT_LABELS[r.context] || r.context}] Sac:${r.satiety}/5, Ruido:${r.food_noise}/5, Est:${r.gi_comfort}/5${r.note ? ` | Nota: "${r.note}"` : ''}`;
+      }).join('\n');
+
+      const userPrompt = `Registro actual (${new Date().toLocaleString('es-MX', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}):
+- Dosis: ${latestDose ? latestDose.dose_mg + ' mg' : 'N/A'} | Día del ciclo: ${payload.cycle_day ?? 'N/A'}
+- Momento: ${CONTEXT_LABELS[payload.context] || payload.context}
+- Saciedad: ${payload.satiety}/5 | Ruido mental: ${payload.food_noise}/5 | Estómago: ${payload.gi_comfort}/5
+- Etiquetas: ${payload.tags.length ? payload.tags.join(', ') : 'ninguna'}
+- Nota escrita por el usuario: ${payload.note ? `"${payload.note}"` : '(sin texto)'}
+
+Historial previo reciente (para detectar continuidad):
+${historyLines || '(primer registro)'}`;
+
+      const aiText = await askDeepSeek(SYSTEM_PROMPT_COACH, userPrompt, 260);
+      if (aiText) {
+        tipBox.innerHTML = `<h3><span>Recomendación del momento</span><span class="ai-badge">DeepSeek IA</span></h3>${formatBulletsHtml(aiText)}`;
+      } else {
+        throw new Error('Respuesta vacía');
+      }
+    } catch (err) {
+      const tips = buildInstantTips(payload);
+      tipBox.innerHTML = `<h3><span>Recomendación del momento</span><span class="hint">Modo local</span></h3><ul>${tips.map(t => `<li>${t}</li>`).join('')}</ul>`;
+      showToast('DeepSeek no respondió, usando modo local', true);
+    }
+  } else {
+    const tips = buildInstantTips(payload);
+    tipBox.innerHTML = `<h3><span>Recomendación del momento</span></h3><ul>${tips.map(t => `<li>${t}</li>`).join('')}</ul>`;
+  }
+
+  document.getElementById('checkin-note').value = '';
+  state.tags = [];
+  document.querySelectorAll('#tag-chips .chip').forEach(b => b.classList.remove('active'));
+});
+
+document.getElementById('analyze-deepseek-btn').addEventListener('click', async () => {
+  const dsKey = localStorage.getItem(STORAGE_DS_KEY);
+  if (!dsKey) {
+    showToast('Pega primero tu clave de DeepSeek abajo en esta pestaña', true);
+    document.getElementById('ds-key-input').focus();
+    return;
+  }
+
+  const btn = document.getElementById('analyze-deepseek-btn');
+  const box = document.getElementById('deepseek-weekly-box');
+  btn.disabled = true;
+  btn.textContent = '🤖 Analizando tus últimos 7 días...';
+
+  try {
+    const client = getClient();
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const [logsRes, weightsRes] = await Promise.all([
+      client.from('check_ins').select('*').gte('recorded_at', since).order('recorded_at', { ascending: true }),
+      client.from('weigh_ins').select('*').order('measured_at', { ascending: false }).limit(3)
+    ]);
+
+    const logs = logsRes.data || [];
+    const weights = weightsRes.data || [];
+
+    const logsText = logs.map(r => {
+      const f = new Date(r.recorded_at).toLocaleString('es-MX', { weekday: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      return `- [${f} · Día ${r.cycle_day ?? '?'} · ${CONTEXT_LABELS[r.context] || r.context}] Sac:${r.satiety}/5, Ruido:${r.food_noise}/5, Est:${r.gi_comfort}/5${r.tags?.length ? ` | Tags:${r.tags.join(',')}` : ''}${r.note ? ` | Nota:"${r.note}"` : ''}`;
+    }).join('\n');
+
+    const wText = weights.map(w => `${new Date(w.measured_at).toLocaleDateString('es-MX')}: ${w.weight_kg}kg (Grasa ${w.body_fat_pct ?? '?'}%, Músculo ${w.muscle_mass_kg ?? '?'}kg)`).join(' | ');
+
+    const weeklyPrompt = `Analiza los últimos 7 días del paciente (dosis actual: ${latestDose ? latestDose.dose_mg + ' mg, Día ' + calcCycleDay(latestDose.applied_at) : 'N/A'}).
+Báscula reciente: ${wText || 'Sin registros'}
+Check-ins (${logs.length}):
+${logsText || '(sin registros)'}
+
+Entrega en máximo 4 viñetas:
+1) Qué comidas o momentos se asociaron con mejor saciedad o digestión.
+2) Qué detonó ruido mental o reflujo (si hubo).
+3) Cómo va la curva respecto al día del ciclo.
+4) Dos ajustes concretos para los próximos días.`;
+
+    const aiText = await askDeepSeek(SYSTEM_PROMPT_COACH, weeklyPrompt, 380);
+    box.innerHTML = `<h3><span>Análisis semanal personalizado</span><span class="ai-badge">DeepSeek IA</span></h3>${formatBulletsHtml(aiText || 'Sin respuesta.')}`;
+    box.classList.remove('hidden');
+  } catch (err) {
+    showToast('Error al consultar DeepSeek: ' + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🤖 Analizar mis últimos 7 días con DeepSeek';
   }
 });
 
@@ -566,6 +742,7 @@ function renderWeights(weights) {
 }
 
 async function loadHistory() {
+  updateDsStatusUI();
   const client = getClient();
   const [summaryRes, logsRes, weightsRes] = await Promise.all([
     client.from('v_cycle_summary').select('*'),
@@ -606,7 +783,7 @@ async function loadHistory() {
       const dateStr = new Date(item.recorded_at).toLocaleString('es-MX', {
         month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
       });
-      const tagsHtml = (item.tags || []).map(t => `<span class="tag-mini">#${t}</span>`).join('');
+      const tagsHtml = (item.tags || []).map(t => `<span class="tag-mini">#${escapeHtml(t)}</span>`).join('');
       return `
         <div class="log-item">
           <div class="log-top">
@@ -619,7 +796,7 @@ async function loadHistory() {
             <span>Estómago: ${item.gi_comfort}/5</span>
           </div>
           ${tagsHtml ? `<div>${tagsHtml}</div>` : ''}
-          ${item.note ? `<div class="hint" style="margin-top:4px;">"${item.note}"</div>` : ''}
+          ${item.note ? `<div class="hint" style="margin-top:4px;">"${escapeHtml(item.note)}"</div>` : ''}
         </div>
       `;
     }).join('');
@@ -638,7 +815,6 @@ window.deleteCheckin = async (id) => {
 
 document.getElementById('refresh-btn').addEventListener('click', loadHistory);
 
-// Copiar resumen para Gemini
 document.getElementById('copy-gemini-btn').addEventListener('click', async () => {
   const client = getClient();
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
