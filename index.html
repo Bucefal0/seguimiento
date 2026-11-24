@@ -144,7 +144,20 @@
           <button type="button" class="chip" data-tag="reflujo">Reflujo</button>
         </div>
 
-        <label for="checkin-note">Qué comiste o cómo te sientes (puedes usar el micrófono del teclado)</label>
+        <div class="photo-row">
+          <input type="file" id="meal-photo-input" accept="image/*" class="hidden" />
+          <button type="button" id="meal-photo-btn" class="btn-photo">📷 Foto del plato (detectar con IA)</button>
+        </div>
+
+        <div id="meal-preview-wrap" class="meal-preview-wrap hidden">
+          <img id="meal-preview-img" class="meal-preview-img" alt="Vista previa del plato" />
+          <div style="flex:1;">
+            <div id="meal-photo-status" class="hint">Foto lista</div>
+            <button type="button" id="meal-photo-clear" class="del-btn" style="padding:4px 0;">Quitar foto</button>
+          </div>
+        </div>
+
+        <label for="checkin-note">Qué comiste o cómo te sientes (escribe, dicta o sube foto)</label>
         <textarea id="checkin-note" rows="2" placeholder="Ej. Hoy cené atún con tostadas, sin reflujo..."></textarea>
 
         <button type="button" id="save-checkin-btn" class="btn-primary">Guardar registro</button>
@@ -311,25 +324,27 @@
           <button type="button" id="export-csv-btn" class="btn-secondary">Exportar CSV</button>
         </div>
         <p class="hint" style="margin:0 0 10px 0;">
-          Día 0 = día de inyección · Día 6 = víspera de la siguiente dosis
+          Día 0 = inyección · <strong>↑</strong> más alto mejor · <strong>↓</strong> más bajo mejor · <span class="status-ok">verde</span> = óptimo · <span class="status-warn">naranja</span> = atención
         </p>
         <div style="overflow-x:auto;">
-          <table>
+          <table class="table-compact">
             <thead>
               <tr>
-                <th>Dosis</th>
                 <th>Día</th>
-                <th>Reg.</th>
-                <th>Saciedad</th>
-                <th>Ruido</th>
-                <th>Estómago</th>
+                <th>Toques</th>
+                <th>Saciedad ↑</th>
+                <th>Ruido ↓</th>
+                <th>Estómago ↑</th>
               </tr>
             </thead>
             <tbody id="cycle-summary-body">
-              <tr><td colspan="6" class="hint">Cargando...</td></tr>
+              <tr><td colspan="5" class="hint">Cargando...</td></tr>
             </tbody>
           </table>
         </div>
+        <p id="cycle-sample-note" class="hint hidden" style="margin:8px 0 0 0;">
+          * 1x = un solo registro ese día (se irá estabilizando conforme agregues más toques).
+        </p>
       </div>
 
       <div class="card">

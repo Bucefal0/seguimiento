@@ -162,6 +162,83 @@ async function askDeepSeek(systemPrompt, userPrompt, maxTokens = 280) {
   return data.choices?.[0]?.message?.content?.trim() || null;
 }
 
+function compressImageToDataUrl(file, maxSide = 900, quality = 0.78) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('No se pudo leer la imagen'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Formato de imagen no válido'));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxSide || height > maxSide) {
+          if (width >= height) {
+            height = Math.round((height * maxSide) / width);
+            width = maxSide;
+          } else {
+            width = Math.round((width * maxSide) / height);
+            height = maxSide;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function analyzeMealPhotoWithDeepSeek(dataUrl) {
+  const dsKey = localStorage.getItem(STORAGE_DS_KEY);
+  if (!dsKey) throw new Error('Configura tu API Key de DeepSeek en la pestaña Análisis');
+
+  const prompt = `Identifica brevemente qué alimentos y porciones aproximadas se ven en esta foto de comida para un registro de salud (paciente en tratamiento con Tirzepatida que cuida proteína y reflujo nocturno).
+Responde SOLO en JSON válido con esta estructura exacta (sin bloques markdown):
+{"summary": "descripción corta en español en 1 línea indicando alimentos y nota rápida de proteína/grasa", "tags": []}
+En "tags" incluye únicamente los que apliquen de esta lista exacta: ["proteina_primero", "comida_solida", "cena_ligera", "snack_nocturno", "antojo_dulce"].`;
+
+  const res = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${dsKey}`
+    },
+    body: JSON.stringify({
+      model: 'deepseek-flash',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'image_url', image_url: { url: dataUrl } },
+            { type: 'text', text: prompt }
+          ]
+        }
+      ],
+      temperature: 0.2,
+      max_tokens: 180
+    })
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`DeepSeek Vision HTTP ${res.status}: ${errText.slice(0, 120)}`);
+  }
+
+  const data = await res.json();
+  const raw = data.choices?.[0]?.message?.content?.trim() || '';
+  const cleaned = raw.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    return { summary: raw, tags: [] };
+  }
+}
+
 const SYSTEM_PROMPT_COACH = `Eres un asistente práctico de seguimiento metabólico para un paciente hombre de 50 años (1.78 m) en tratamiento con Tirzepatida (titulación gradual de 2.5 mg -> ~3.5 mg -> 5.0 mg, evaluando tiroides con TSH basal elevada).
 Contexto clave:
 - Entrena spinning (8-9 pm) y funcional (9-10 pm), llega a casa 10:30 pm y duerme 12:00 am.
@@ -223,6 +300,72 @@ document.querySelectorAll('#tag-chips .chip').forEach(btn => {
     }
   });
 });
+
+// Foto del plato con DeepSeek Vision (deepseek-flash)
+const mealPhotoInput = document.getElementById('meal-photo-input');
+const mealPhotoBtn = document.getElementById('meal-photo-btn');
+const mealPreviewWrap = document.getElementById('meal-preview-wrap');
+const mealPreviewImg = document.getElementById('meal-preview-img');
+const mealPhotoStatus = document.getElementById('meal-photo-status');
+
+function clearMealPreview() {
+  if (mealPhotoInput) mealPhotoInput.value = '';
+  if (mealPreviewWrap) mealPreviewWrap.classList.add('hidden');
+  if (mealPreviewImg) mealPreviewImg.removeAttribute('src');
+}
+
+if (mealPhotoBtn && mealPhotoInput) {
+  mealPhotoBtn.addEventListener('click', () => {
+    const dsKey = localStorage.getItem(STORAGE_DS_KEY);
+    if (!dsKey) {
+      showToast('Pega primero tu API Key de DeepSeek en Análisis', true);
+      return;
+    }
+    mealPhotoInput.click();
+  });
+
+  document.getElementById('meal-photo-clear')?.addEventListener('click', clearMealPreview);
+
+  mealPhotoInput.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    mealPhotoBtn.disabled = true;
+    mealPhotoBtn.textContent = '📷 Analizando plato...';
+    mealPreviewWrap.classList.remove('hidden');
+    mealPhotoStatus.textContent = 'Comprimiendo y analizando con DeepSeek...';
+
+    try {
+      const dataUrl = await compressImageToDataUrl(file, 900, 0.78);
+      mealPreviewImg.src = dataUrl;
+      const result = await analyzeMealPhotoWithDeepSeek(dataUrl);
+
+      if (result?.summary) {
+        const noteEl = document.getElementById('checkin-note');
+        const prev = noteEl.value.trim();
+        noteEl.value = prev ? `${prev} · ${result.summary}` : result.summary;
+      }
+
+      const allowedTags = ['proteina_primero', 'comida_solida', 'cena_ligera', 'snack_nocturno', 'antojo_dulce'];
+      (result?.tags || []).forEach(tag => {
+        if (allowedTags.includes(tag) && !state.tags.includes(tag)) {
+          state.tags.push(tag);
+          const chip = document.querySelector(`#tag-chips .chip[data-tag="${tag}"]`);
+          if (chip) chip.classList.add('active');
+        }
+      });
+
+      mealPhotoStatus.textContent = 'Comida detectada y agregada a tu nota';
+      showToast('Comida detectada. Revisa y guarda');
+    } catch (err) {
+      mealPhotoStatus.textContent = 'No se pudo analizar la foto';
+      showToast(err.message || 'Error al analizar la foto', true);
+    } finally {
+      mealPhotoBtn.disabled = false;
+      mealPhotoBtn.textContent = '📷 Foto del plato (detectar con IA)';
+    }
+  });
+}
 
 document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -405,6 +548,7 @@ ${historyLines || '(primer registro)'}`;
   }
 
   document.getElementById('checkin-note').value = '';
+  clearMealPreview();
   state.tags = [];
   document.querySelectorAll('#tag-chips .chip').forEach(b => b.classList.remove('active'));
 });
@@ -837,19 +981,75 @@ async function loadHistory() {
   renderWeights(weights);
 
   const tbody = document.getElementById('cycle-summary-body');
+  const sampleNote = document.getElementById('cycle-sample-note');
   if (summary.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="hint">Aún no hay suficientes datos.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="hint">Aún no hay suficientes datos.</td></tr>';
+    if (sampleNote) sampleNote.classList.add('hidden');
   } else {
-    tbody.innerHTML = summary.map(r => `
-      <tr>
-        <td>${r.dose_mg ? r.dose_mg + ' mg' : '—'}</td>
-        <td><strong>Día ${r.cycle_day ?? '—'}</strong></td>
-        <td>${r.total_registros}</td>
-        <td>${r.prom_saciedad}</td>
-        <td>${r.prom_ruido_mental}</td>
-        <td>${r.prom_bienestar_gi}</td>
-      </tr>
-    `).join('');
+    const scorePill = (val, higherIsBetter = true) => {
+      if (val === null || val === undefined || isNaN(val)) return '—';
+      const n = Number(val);
+      let cls = 'pill-mid';
+      if (higherIsBetter) {
+        if (n >= 3.8) cls = 'pill-ok';
+        else if (n < 2.8) cls = 'pill-warn';
+      } else {
+        if (n <= 2.0) cls = 'pill-ok';
+        else if (n > 3.2) cls = 'pill-warn';
+      }
+      const txt = Number.isInteger(n) ? n.toString() : n.toFixed(1);
+      return `<span class="pill-metric ${cls}">${txt}</span>`;
+    };
+
+    // Agrupar por dosis (más alta/reciente primero; sin dosis al final)
+    const groupsMap = new Map();
+    summary.forEach(r => {
+      const key = r.dose_mg ? String(r.dose_mg) : '__none__';
+      if (!groupsMap.has(key)) groupsMap.set(key, []);
+      groupsMap.get(key).push(r);
+    });
+
+    const sortedKeys = Array.from(groupsMap.keys()).sort((a, b) => {
+      if (a === '__none__') return 1;
+      if (b === '__none__') return -1;
+      return parseFloat(b) - parseFloat(a);
+    });
+
+    let hasSingleSample = false;
+    const htmlParts = [];
+
+    sortedKeys.forEach(key => {
+      const rows = groupsMap.get(key).sort((a, b) => (a.cycle_day ?? 99) - (b.cycle_day ?? 99));
+      const groupTitle = key === '__none__' ? 'Sin dosis asignada (registros previos)' : `Dosis ${key} mg`;
+      htmlParts.push(`
+        <tr class="dose-group-row">
+          <td colspan="5">${groupTitle}</td>
+        </tr>
+      `);
+
+      rows.forEach(r => {
+        const count = Number(r.total_registros || 0);
+        const isLow = count <= 1;
+        if (isLow) hasSingleSample = true;
+        const dayLabel = r.cycle_day !== null && r.cycle_day !== undefined ? `Día ${r.cycle_day}` : 'Sin día';
+        const countHtml = isLow
+          ? `<span class="low-sample">${count}x*</span>`
+          : `<strong>${count}x</strong>`;
+
+        htmlParts.push(`
+          <tr class="${isLow ? 'row-low-sample' : ''}">
+            <td><strong>${dayLabel}</strong></td>
+            <td>${countHtml}</td>
+            <td>${scorePill(r.prom_saciedad, true)}</td>
+            <td>${scorePill(r.prom_ruido_mental, false)}</td>
+            <td>${scorePill(r.prom_bienestar_gi, true)}</td>
+          </tr>
+        `);
+      });
+    });
+
+    tbody.innerHTML = htmlParts.join('');
+    if (sampleNote) sampleNote.classList.toggle('hidden', !hasSingleSample);
   }
 
   const container = document.getElementById('recent-logs');
