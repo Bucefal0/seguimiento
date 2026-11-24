@@ -34,6 +34,15 @@ const EXPECTED_MODEL = {
     { day: 5, phase: 'Día 5 · Vida media (~50%)', satMin: 2.5, satMax: 3.8, noiseMax: 3.5, desc: 'La concentración ronda la mitad. Es normal notar algo más de apetito en la tarde.' },
     { day: 6, phase: 'Día 6 · Valle semanal', satMin: 2.0, satMax: 3.5, noiseMax: 4.0, desc: 'Nivel más bajo antes de la siguiente dosis; en 2.5 mg es común que regresen antojos.' }
   ],
+  '3.5': [
+    { day: 0, phase: 'Día 0 · Aplicación ~3.5 mg', satMin: 3.2, satMax: 4.2, noiseMax: 2.8, desc: 'Escalón intermedio estimado; absorción progresiva sobre la base previa.' },
+    { day: 1, phase: 'Día 1 · Subida firme', satMin: 4.0, satMax: 5.0, noiseMax: 1.8, desc: 'Saciedad alta y menos ruido mental que con 2.5 mg. Prioriza proteína.' },
+    { day: 2, phase: 'Día 2 · Pico intermedio', satMin: 4.0, satMax: 5.0, noiseMax: 1.8, desc: 'Punto máximo de concentración; mantén cenas ligeras para evitar reflujo.' },
+    { day: 3, phase: 'Día 3 · Meseta sólida', satMin: 3.7, satMax: 4.7, noiseMax: 2.2, desc: 'Buen balance entre saciedad sostenida y comodidad digestiva.' },
+    { day: 4, phase: 'Día 4 · Estabilidad media', satMin: 3.2, satMax: 4.3, noiseMax: 2.7, desc: 'Descenso más amortiguado que con 2.5 mg; cuida hidratación.' },
+    { day: 5, phase: 'Día 5 · Vida media (~50%)', satMin: 2.8, satMax: 4.0, noiseMax: 3.2, desc: 'Ligero repunte de apetito hacia la tarde; apóyate en proteína magra.' },
+    { day: 6, phase: 'Día 6 · Valle semanal', satMin: 2.4, satMax: 3.7, noiseMax: 3.6, desc: 'Nivel más bajo antes de la siguiente aplicación; prepara snacks seguros en la noche.' }
+  ],
   '5.0': [
     { day: 0, phase: 'Día 0 · Aplicación 5 mg', satMin: 3.5, satMax: 4.5, noiseMax: 2.5, desc: 'Nueva dosis terapéutica; transición gradual sobre el remanente de la semana previa.' },
     { day: 1, phase: 'Día 1 · Pico alto', satMin: 4.2, satMax: 5.0, noiseMax: 1.5, desc: 'Saciedad muy fuerte. Vigila no saltarte proteína ni cenar pesado por riesgo de reflujo.' },
@@ -46,7 +55,8 @@ const EXPECTED_MODEL = {
 };
 
 function getExpectedFor(doseMg, day) {
-  const key = (doseMg && parseFloat(doseMg) >= 5.0) ? '5.0' : '2.5';
+  const d = doseMg ? parseFloat(doseMg) : 2.5;
+  const key = d >= 5.0 ? '5.0' : (d >= 3.0 ? '3.5' : '2.5');
   const clampedDay = Math.min(6, Math.max(0, day ?? 0));
   return { key, list: EXPECTED_MODEL[key], current: EXPECTED_MODEL[key][clampedDay] };
 }
@@ -152,7 +162,7 @@ async function askDeepSeek(systemPrompt, userPrompt, maxTokens = 280) {
   return data.choices?.[0]?.message?.content?.trim() || null;
 }
 
-const SYSTEM_PROMPT_COACH = `Eres un asistente práctico de seguimiento metabólico para un paciente hombre de 50 años (1.78 m) en tratamiento con Tirzepatida (actualmente 2.5 mg/semana, evaluando tiroides con TSH basal elevada).
+const SYSTEM_PROMPT_COACH = `Eres un asistente práctico de seguimiento metabólico para un paciente hombre de 50 años (1.78 m) en tratamiento con Tirzepatida (titulación gradual de 2.5 mg -> ~3.5 mg -> 5.0 mg, evaluando tiroides con TSH basal elevada).
 Contexto clave:
 - Entrena spinning (8-9 pm) y funcional (9-10 pm), llega a casa 10:30 pm y duerme 12:00 am.
 - Cuida proteger masa muscular (meta 110-130 g proteína/día), evitar reflujo nocturno y controlar snacks automáticos en noches de Xbox (especialmente día 5-6 del ciclo).
@@ -670,8 +680,10 @@ function renderInsights(summary, logs, weights) {
 
 function renderWeights(weights) {
   const kpiBox = document.getElementById('weight-kpis');
+  const tbody = document.getElementById('weighin-table-body');
   if (!weights || weights.length === 0) {
     kpiBox.innerHTML = '<p class="hint" style="grid-column:1/-1;">Aún no hay mediciones de báscula en la nube.</p>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="11" class="hint">Aún no hay mediciones registradas.</td></tr>';
     return;
   }
 
@@ -685,7 +697,7 @@ function renderWeights(weights) {
   kpiBox.innerHTML = `
     <div class="compare-cell">
       <span class="lbl">Peso actual</span>
-      <span class="val status-info">${last.weight_kg} kg</span>
+      <span class="val status-info">${Number(last.weight_kg).toFixed(2)} kg</span>
     </div>
     <div class="compare-cell">
       <span class="lbl">Cambio total</span>
@@ -696,6 +708,71 @@ function renderWeights(weights) {
       <span class="val">${last.body_fat_pct ?? '—'}% (${fatDiff})</span>
     </div>
   `;
+
+  if (tbody) {
+    const firstKg = Number(first.weight_kg);
+    const firstFatKg = first.body_fat_pct ? firstKg * (Number(first.body_fat_pct) / 100) : null;
+
+    const rowsHtml = weights.map((w, idx) => {
+      const kg = Number(w.weight_kg);
+      const prevKg = idx > 0 ? Number(weights[idx - 1].weight_kg) : null;
+      const semDiff = prevKg !== null ? kg - prevKg : null;
+      const acumDiff = idx > 0 ? kg - firstKg : null;
+      const fatPct = w.body_fat_pct !== null && w.body_fat_pct !== undefined ? Number(w.body_fat_pct) : null;
+      const fatKg = fatPct !== null ? kg * (fatPct / 100) : null;
+      const muscKg = w.muscle_mass_kg !== null && w.muscle_mass_kg !== undefined ? Number(w.muscle_mass_kg) : null;
+      const dateStr = new Date(w.measured_at).toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit' });
+
+      const semStr = semDiff === null ? '—' : `${semDiff > 0 ? '+' : ''}${semDiff.toFixed(2)}`;
+      const semCls = semDiff === null ? '' : (semDiff <= 0 ? 'status-ok' : 'status-warn');
+      const acumStr = acumDiff === null ? '—' : `${acumDiff > 0 ? '+' : ''}${acumDiff.toFixed(2)}`;
+
+      return `
+        <tr>
+          <td>${idx}</td>
+          <td>${dateStr}</td>
+          <td><strong>${kg.toFixed(2)}</strong></td>
+          <td class="${semCls}">${semStr}</td>
+          <td class="status-info">${acumStr}</td>
+          <td>${fatPct !== null ? fatPct.toFixed(1) + '%' : '—'}</td>
+          <td>${fatKg !== null ? fatKg.toFixed(2) : '—'}</td>
+          <td>${muscKg !== null ? muscKg.toFixed(2) : '—'}</td>
+          <td>${w.visceral_fat ?? '—'}</td>
+          <td>${w.water_pct !== null && w.water_pct !== undefined ? Number(w.water_pct).toFixed(1) + '%' : '—'}</td>
+          <td>${w.bmr_kcal ?? '—'}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const lastKg = Number(last.weight_kg);
+    const totalKgDiff = lastKg - firstKg;
+    const totalFatPctDiff = (last.body_fat_pct && first.body_fat_pct) ? (Number(last.body_fat_pct) - Number(first.body_fat_pct)) : null;
+    const lastFatKg = last.body_fat_pct ? lastKg * (Number(last.body_fat_pct) / 100) : null;
+    const totalFatKgDiff = (lastFatKg !== null && firstFatKg !== null) ? (lastFatKg - firstFatKg) : null;
+    const totalMuscDiff = (last.muscle_mass_kg && first.muscle_mass_kg) ? (Number(last.muscle_mass_kg) - Number(first.muscle_mass_kg)) : null;
+    const totalViscDiff = (last.visceral_fat && first.visceral_fat) ? (Number(last.visceral_fat) - Number(first.visceral_fat)) : null;
+    const totalWaterDiff = (last.water_pct && first.water_pct) ? (Number(last.water_pct) - Number(first.water_pct)) : null;
+    const totalBmrDiff = (last.bmr_kcal && first.bmr_kcal) ? (Number(last.bmr_kcal) - Number(first.bmr_kcal)) : null;
+
+    const fmtSigned = (v, dec = 2, suffix = '') => v === null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(dec)}${suffix}`;
+
+    const totalRow = weights.length >= 2 ? `
+      <tr class="row-total">
+        <td colspan="2"><strong>Balance</strong></td>
+        <td class="status-ok"><strong>${fmtSigned(totalKgDiff, 2)}</strong></td>
+        <td>—</td>
+        <td class="status-ok"><strong>${fmtSigned((totalKgDiff / firstKg) * 100, 1, '%')}</strong></td>
+        <td class="status-ok"><strong>${fmtSigned(totalFatPctDiff, 1, '%')}</strong></td>
+        <td class="status-ok"><strong>${fmtSigned(totalFatKgDiff, 2)}</strong></td>
+        <td><strong>${fmtSigned(totalMuscDiff, 2)}</strong></td>
+        <td class="status-ok"><strong>${totalViscDiff === null ? '—' : (totalViscDiff > 0 ? '+' : '') + totalViscDiff}</strong></td>
+        <td class="status-info"><strong>${fmtSigned(totalWaterDiff, 1, '%')}</strong></td>
+        <td><strong>${totalBmrDiff === null ? '—' : (totalBmrDiff > 0 ? '+' : '') + totalBmrDiff}</strong></td>
+      </tr>
+    ` : '';
+
+    tbody.innerHTML = rowsHtml + totalRow;
+  }
 
   const ctx = document.getElementById('weight-chart').getContext('2d');
   const labels = weights.map(w => new Date(w.measured_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short' }));

@@ -500,4 +500,20 @@ th {
   margin-bottom: 10px;
 }
 
+.table-compact {
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.table-compact th,
+.table-compact td {
+  padding: 7px 6px;
+}
+
+.row-total td {
+  background: rgba(45, 212, 191, 0.1);
+  border-top: 1px solid var(--primary);
+  border-bottom: none;
+}
+
 .hidden { display: none !important; }
